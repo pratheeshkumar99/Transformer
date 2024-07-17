@@ -102,4 +102,44 @@ The training parameters can be configured in the `config.py` file. Key settings 
 -**`tokenizer_file`**: The file pattern for tokenizers.
     tokenizer_file = "tokenizer_{0}.json"experiment_name: The name for the experiment logs
 
-### Training Script Overview
+## Training Script Overview
+
+The training script is designed to load the dataset, preprocess the data, configure the model, and handle the training loop. Here are the main components:
+
+- **Data Loading and Tokenization**: The dataset is loaded from Hugging Face’s library and tokenized using the tokenizers library. Tokenizers are built or loaded for both source and target languages.
+- **Dataset Preparation**: The dataset is split into training and validation sets. A custom dataset class (BilingualDataset) is used to prepare the data, including adding start-of-sequence and end-of-sequence tokens and padding the sequences to a fixed length.
+- **Model Training**: The script sets up the Transformer model, optimizer, and loss function. It handles the training loop, including logging progress and running validation checks at the end of each epoch. The model’s performance is tracked using metrics such as Character Error Rate (CER), Word Error Rate (WER), and BLEU score.
+
+## Running the Training
+
+To run the training process, follow these steps:
+
+1. **Install Dependencies**: Ensure you have all the necessary Python packages installed. This can typically be done via a `requirements.txt` file or using a package manager like `pip`.
+2. **Configure Parameters**: Adjust the configuration settings in `config.py` to match your requirements, such as the number of epochs, learning rate, and dataset paths.
+3. **Execute the Script**: Run the main training script. This will load the dataset, preprocess the data, train the model, and save the model checkpoints and logs.
+
+## Additional Information
+
+- **Validation and Testing**: During the training process, the model’s performance is periodically evaluated on the validation set. After training, the model can be tested on a separate test set to measure its accuracy and generalization capability.
+- **TensorBoard Integration**: The script includes integration with TensorBoard for tracking training progress and visualizing metrics. Ensure TensorBoard is installed and configured to use this feature.
+- **Error Handling and Debugging**: The script includes various checks and logging statements to help with debugging. Ensure to review these logs if you encounter any issues during the training process.
+
+By following these steps and understanding the preprocessing and configuration details, you can effectively train a Neural Machine Translation model using the provided scripts and dataset.
+
+## File Descriptions
+
+- **attention_visual.ipynb**: A Jupyter notebook for visualizing the model’s attention mechanisms.
+- **Beam_Search.ipynb**: A Jupyter notebook implementing beam search strategies for better translations.
+- **Colab_Train.ipynb**: A Jupyter notebook for training the model on Google Colab.
+- **config.py**: Configuration file containing the training parameters.
+- **dataset.py**: Script for preparing and loading the dataset.
+- **Inference.ipynb**: A Jupyter notebook for running inference on the trained model.
+- **model_train.ipynb**: A Jupyter notebook for training the model interactively.
+- **model.py**: Script defining the Transformer model architecture.
+- **README.md**: This file.
+- **requirements.txt**: List of required Python packages.
+- **runs/**: Directory containing TensorBoard logs.
+- **tokenizer_en.json**: Pretrained tokenizer for the source language.
+- **tokenizer_it.json**: Pretrained tokenizer for the target language.
+- **train_.py**: Main script for training the model.
+- **translate.py**: Script for running translation on input text files.
