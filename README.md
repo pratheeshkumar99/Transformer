@@ -33,5 +33,12 @@ python translate.py --input your_input.txt --output output.txt
 - **Beam Search**: Enhance the decoding process with [Beam_Search.ipynb](Beam_Search.ipynb), which implements beam search strategies for more accurate and coherent translations. This technique is particularly useful for complex translation tasks and when you need higher quality outputs.
 
 
+# Training Process and Configuration
 
+## Data Preparation
+The training leverages the OPUS-books dataset for English to Italian translation, provided by Hugging Face, which is instrumental for training our Neural Machine Translation (NMT) model.
+
+### Dataset Requirements
+- **Content**: The dataset consists of parallel sentences in English and Italian, suitable for training machine translation systems.
+- **Source**: Data is sourced from the OPUS-books collection available through the Hugging Face datasets library.
 
