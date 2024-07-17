@@ -26,7 +26,12 @@ pip install -r requirements.txt
 python translate.py --input your_input.txt --output output.txt
 ```
 
-### Additional Scripts
-	•	Visualization: To visualize attention weights, navigate to the attention_visual.ipynb notebook.
-	•	Beam Search: For advanced decoding techniques, refer to Beam_Search.ipynb.
+## Additional Scripts
+
+- **Visualization**: Explore the model's attention mechanisms interactively by navigating to [attention_visual.ipynb](attention_visual.ipynb). This notebook provides tools to visually analyze how different parts of the input sequence affect each other through the model's attention weights.
+  
+- **Beam Search**: Enhance the decoding process with [Beam_Search.ipynb](Beam_Search.ipynb), which implements beam search strategies for more accurate and coherent translations. This technique is particularly useful for complex translation tasks and when you need higher quality outputs.
+
+
+
 
