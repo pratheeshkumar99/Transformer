@@ -64,9 +64,42 @@ This project leverages the OPUS-books dataset for English to Italian translation
 ### Configuration Settings
 The training parameters can be configured in the `config.py` file. Key settings include:
 
+- **`batch_size`**: The number of samples per batch of computation. 
+    batch_size = 8
+
 - **`num_epochs`**: The number of complete passes through the training dataset. For instance:
   ```python
   num_epochs = 20  # Train the model for 20 epochs.
+  learning_rate = 10**-4, #Train the model with this learning rate.
 
+-**`lr`**: Learning rate for the optimizer
+    lr = 10**-4
 
-  
+-**`seq_len`**: The length of the input and output sequences.
+    seq_len = 350
+
+-**`d_model`**: The dimension of the model.
+    d_model = 512
+
+-**`datasource`**: The source of the dataset
+    datasource = 'opus_books'
+
+-**`lang_src`**: The source language code.
+    lang_src = "en"
+
+-**`lang_tgt`**: The target language code
+    lang_tgt = "it"
+
+-**`model_folder`**: The folder to save model checkpoints
+    model_folder = "/content/drive/MyDrive/Models/pytorch-transformer/weights"
+
+-**`model_basename`**: The base name for model checkpoints.
+    model_basename = "tmodel_"
+
+-**`preload`**: The model checkpoint to preload
+    preload = "latest"
+
+-**`tokenizer_file`**: The file pattern for tokenizers.
+    tokenizer_file = "tokenizer_{0}.json"experiment_name: The name for the experiment logs
+
+### Training Script Overview
