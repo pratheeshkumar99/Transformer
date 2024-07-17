@@ -26,4 +26,7 @@ pip install -r requirements.txt
 python translate.py --input your_input.txt --output output.txt
 ```
 
+### Additional Scripts
+	•	Visualization: To visualize attention weights, navigate to the attention_visual.ipynb notebook.
+	•	Beam Search: For advanced decoding techniques, refer to Beam_Search.ipynb.
 
