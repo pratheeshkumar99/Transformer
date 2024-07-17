@@ -89,7 +89,7 @@ The training parameters can be configured in the `config.py` file. Key settings 
 - **`preload`**: The model checkpoint to preload
     preload = "latest"
 
--**`tokenizer_file`**: The file pattern for tokenizers.
+- **`tokenizer_file`**: The file pattern for tokenizers.
     tokenizer_file = "tokenizer_{0}.json"experiment_name: The name for the experiment logs
 
 ## Training Script Overview
