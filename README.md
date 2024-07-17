@@ -42,3 +42,31 @@ The training leverages the OPUS-books dataset for English to Italian translation
 - **Content**: The dataset consists of parallel sentences in English and Italian, suitable for training machine translation systems.
 - **Source**: Data is sourced from the OPUS-books collection available through the Hugging Face datasets library.
 
+# Neural Machine Translation (NMT) Training
+
+## Training Process and Configuration
+
+This project leverages the OPUS-books dataset for English to Italian translation, provided by Hugging Face, to train a Neural Machine Translation (NMT) model using the Transformer architecture.
+
+### Data Preparation
+
+#### Dataset Requirements
+- **Content**: The dataset consists of parallel sentences in English and Italian, suitable for training machine translation systems.
+- **Source**: Data is sourced from the OPUS-books collection available through the Hugging Face datasets library.
+
+#### Preprocessing Steps
+1. **Tokenization**: Sentences are tokenized into words or subwords, which are crucial for processing by the Transformer model. The tokenization process is handled using the `tokenizers` library from Hugging Face, specifically utilizing `WordLevel` tokenization. The script includes a function (`get_or_build_tokenizer`) that either loads an existing tokenizer or trains a new one from the dataset if it doesn't already exist.
+
+2. **Cleaning**: Ensure data quality by removing noisy or irrelevant characters and correcting common spelling errors. While the current script primarily focuses on tokenization, any additional cleaning operations, such as removing unwanted characters or correcting spelling errors, can be integrated into the preprocessing pipeline before tokenization.
+
+3. **Splitting**: The dataset is typically divided into training, validation, and test sets. A common division might allocate 80% for training, 10% for validation, and 10% for testing. In the script, this is managed using the `random_split` method from PyTorch's `torch.utils.data`. The dataset is split into training and validation sets, and each subset is wrapped into a custom `BilingualDataset` class, which prepares the data for the model.
+
+### Configuration Settings
+The training parameters can be configured in the `config.py` file. Key settings include:
+
+- **`num_epochs`**: The number of complete passes through the training dataset. For instance:
+  ```python
+  num_epochs = 20  # Train the model for 20 epochs.
+
+
+  
