@@ -19,6 +19,7 @@ from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from tokenizers.trainers import WordLevelTrainer
 from tokenizers.pre_tokenizers import Whitespace
+# from validation_ import run_validation
 
 import torchmetrics
 from torch.utils.tensorboard import SummaryWriter
@@ -26,162 +27,89 @@ from torch.utils.tensorboard import SummaryWriter
 # Initialize lists to store metrics
 train_losses = []
 val_losses = []
-blue  = []
+# bleu = []
 cer = []
 wer = []
 
-def greedy_decode(model, source, source_mask, tokenizer_src, tokenizer_tgt, max_len, device):
-    sos_idx = tokenizer_tgt.token_to_id('[SOS]')
-    eos_idx = tokenizer_tgt.token_to_id('[EOS]')
-
-    # Precompute the encoder output and reuse it for every step
-    encoder_output = model.encode(source, source_mask)
-    # Initialize the decoder input with the sos token
-    decoder_input = torch.empty(1, 1).fill_(sos_idx).type_as(source).to(device)
-    while True:
-        if decoder_input.size(1) == max_len:
-            break
-
-        # build mask for target
-        decoder_mask = causal_mask(decoder_input.size(1)).type_as(source_mask).to(device)
-
-        # calculate output
-        out = model.decode(encoder_output, source_mask, decoder_input, decoder_mask)
-
-        # get next token
-        prob = model.project(out[:, -1])
-        _, next_word = torch.max(prob, dim=1)
-        decoder_input = torch.cat(
-            [decoder_input, torch.empty(1, 1).type_as(source).fill_(next_word.item()).to(device)], dim=1
-        )
-
-        if next_word == eos_idx:
-            break
-
-    return decoder_input.squeeze(0)
-
 
 def greedy_batch_decode(model, source, source_mask, tokenizer_src, tokenizer_tgt, max_len, device):
-    results = [greedy_decode(model, src.unsqueeze(0), mask.unsqueeze(0), tokenizer_src, tokenizer_tgt, max_len, device) for src, mask in zip(source, source_mask)]
-    return torch.stack(results)
+    batch_size = source.size(0)
+    sos_idx = tokenizer_tgt.token_to_id('[SOS]')
+    eos_idx = tokenizer_tgt.token_to_id('[EOS]')
     
+    encoder_output = model.encode(source, source_mask)
+    decoder_input = torch.full((batch_size, 1), sos_idx, dtype=torch.long, device=device)
+    
+    all_probs = torch.zeros(batch_size, max_len, tokenizer_tgt.get_vocab_size(), device=device)
+    completed = torch.zeros(batch_size, dtype=torch.bool, device=device)
 
-def run_validation(model, validation_ds, tokenizer_src, tokenizer_tgt, max_len, device, print_msg, global_step, writer, num_examples=2):
-    # model.eval()
-    # count = 0
+    for i in range(1, max_len):
+        if completed.all():
+            break
+        decoder_mask = causal_mask(i).type_as(source_mask).to(device)
+        out = model.decode(encoder_output, source_mask, decoder_input, decoder_mask)
+        
+        prob = model.project(out[:, -1])
+        next_word = prob.argmax(dim=-1)
+        
+        decoder_input = torch.cat([decoder_input, next_word.unsqueeze(1)], dim=1)
+        completed |= (next_word == eos_idx)
+        
+        # Fill probability tensor only for active sequences
+        active = ~completed
+        all_probs[active, i] = prob[active]
 
-    # val_loss = 0
-    # correct = 0
-    # total = 0
+    return all_probs
+
+def run_validation(model, validation_ds, tokenizer_src, tokenizer_tgt, max_len, device):
     model.eval()
     total_loss = 0
-    metric_cer = torchmetrics.CharErrorRate()
-    metric_wer = torchmetrics.WordErrorRate()
-    metric_bleu = torchmetrics.BLEUScore()
-    # total_correct = 0
-    # total = 0
-
+    metric_cer = torchmetrics.CharErrorRate().to(device)
+    metric_wer = torchmetrics.WordErrorRate().to(device)
+    # metric_bleu = torchmetrics.BLEUScore().to(device)
 
     loss_fn = nn.CrossEntropyLoss(ignore_index=tokenizer_src.token_to_id('[PAD]'), label_smoothing=0.1).to(device)
     source_texts, expected, predicted = [], [], []
 
-
-    try:
-        # get the console window width
-        with os.popen('stty size', 'r') as console:
-            _, console_width = console.read().split()
-            console_width = int(console_width)
-    except:
-        # If we can't get the console width, use 80 as default
-        console_width = 80
-
     with torch.no_grad():
-        for batch in validation_ds:
-            # count += 1
-            encoder_input = batch["encoder_input"].to(device) # (b, seq_len)
-            encoder_mask = batch["encoder_mask"].to(device) # (b, 1, 1, seq_len)
-            target = batch["label"].to(device) # (b, seq_len)
+        batch_iterator = tqdm(validation_ds, desc="Validation Batches", leave=False)
+        for batch in batch_iterator:
+            encoder_input = batch["encoder_input"].to(device)
+            encoder_mask = batch["encoder_mask"].to(device)
+            target = batch["label"].to(device)
 
-            # check that the batch size is 1
-            # assert encoder_input.size(
-            #     0) == 1, "Batch size must be 1 for validation"
-
-            model_out = greedy_batch_decode(model, encoder_input, encoder_mask, tokenizer_src, tokenizer_tgt, max_len, device) # (b, seq_len)
-            # loss_fn = nn.CrossEntropyLoss(ignore_index=tokenizer_src.token_to_id('[PAD]'), label_smoothing=0.1).to(device)
-            # lloss = loss_fn(model_out.view(-1, tokenizer_tgt.get_vocab_size()), target.view(-1))
-            loss = loss_fn(model_out.view(-1, tokenizer_tgt.get_vocab_size()), target.view(-1))
-            total_loss += loss.item() * encoder_input.size(0)  # Multiply by batch size for accurate average
-
-
-            # source_text = batch["src_text"][0]
-            # target_text = batch["tgt_text"][0]
-            # model_out_text = tokenizer_tgt.decode(model_out.detach().cpu().numpy())
-
-            # source_texts.append(source_text)
-            # expected.append(target_text)
-            # predicted.append(model_out_text)
+            model_out_probs = greedy_batch_decode(model, encoder_input, encoder_mask, tokenizer_src, tokenizer_tgt, max_len, device)
+            model_out_ids = model_out_probs.argmax(dim=-1)
 
             for idx in range(encoder_input.size(0)):
-                source_text = tokenizer_src.decode(encoder_input[idx].cpu().numpy())
-                target_text = tokenizer_tgt.decode(target[idx].cpu().numpy())
-                predicted_text = tokenizer_tgt.decode(model_out[idx].cpu().numpy())
+                source_text = tokenizer_src.decode(encoder_input[idx].cpu().tolist())
+                target_text = tokenizer_tgt.decode(target[idx].cpu().tolist())
+                predicted_text = tokenizer_tgt.decode(model_out_ids[idx].cpu().tolist())
 
                 source_texts.append(source_text)
                 expected.append(target_text)
                 predicted.append(predicted_text)
 
-            
-            
-            # Print the source, target and model output
-            # print_msg('-'*console_width)
-            # print_msg(f"{f'SOURCE: ':>12}{source_text}")
-            # print_msg(f"{f'TARGET: ':>12}{target_text}")
-            # print_msg(f"{f'PREDICTED: ':>12}{model_out_text}")
+            model_out_probs = model_out_probs.contiguous().view(-1, tokenizer_tgt.get_vocab_size())
 
-            # if count == num_examples:
-            #     print_msg('-'*console_width)
-            #     break
-    
+            # print("model_out_probs shape:",model_out_probs.size())
 
-    # Calculate and log metrics
+            target = target.contiguous().view(-1)
+
+            # print("target shape:",target.size())
+
+            loss = loss_fn(model_out_probs, target)
+            total_loss += loss.item() * encoder_input.size(0)
+            
+            # Safe loggin of the loss
+            batch_iterator.set_postfix({"loss": f"{loss.item():6.3f}"})
+
     avg_loss = total_loss / len(validation_ds.dataset)
-    val_losses.append(avg_loss)
-    cer_data = metric_cer(predicted, expected)
-    wer_data = metric_wer(predicted, expected)
-    bleu_data = metric_bleu(predicted, expected)
-    cer.append(cer_data)
-    wer.append(wer_data)
-    blue.append(bleu_data)
+    cer_data = metric_cer(predicted, expected).item()
+    wer_data = metric_wer(predicted, expected).item()
+    # bleu_data = metric_bleu(predicted, expected).item()
 
-    # if writer:
-    #     # Evaluate the character error rate
-    #     # Compute the char error rate 
-    #     metric = torchmetrics.CharErrorRate()
-    #     cer = metric(predicted, expected)
-    #     writer.add_scalar('validation cer', cer, global_step)
-    #     writer.flush()
-
-    #     # Compute the word error rate
-    #     metric = torchmetrics.WordErrorRate()
-    #     wer = metric(predicted, expected)
-    #     writer.add_scalar('validation wer', wer, global_step)
-    #     writer.flush()
-
-    #     # Compute the BLEU metric
-    #     metric = torchmetrics.BLEUScore()
-    #     bleu = metric(predicted, expected)
-    #     writer.add_scalar('validation BLEU', bleu, global_step)
-    #     writer.flush()
-    # if writer:
-    #     writer.add_scalar('validation loss', avg_loss, global_step)
-    #     writer.add_scalar('validation cer', cer, global_step)
-    #     writer.add_scalar('validation wer', wer, global_step)
-    #     writer.add_scalar('validation BLEU', bleu, global_step)
-    #     writer.flush()
-
-
-    print(f'Validation Loss: {avg_loss:.4f}, CER: {cer_data:.4f}, WER: {wer_data:.4f}, BLEU: {bleu_data:.4f}')
-    return avg_loss, cer, wer, bleu
+    return avg_loss, cer_data, wer_data
 
 
 
@@ -192,7 +120,6 @@ def get_all_sentences(ds, lang):
 def get_or_build_tokenizer(config, ds, lang):
     tokenizer_path = Path(config['tokenizer_file'].format(lang))
     if not Path.exists(tokenizer_path):
-        # Most code taken from: https://huggingface.co/docs/tokenizers/quicktour
         tokenizer = Tokenizer(WordLevel(unk_token="[UNK]"))
         tokenizer.pre_tokenizer = Whitespace()
         trainer = WordLevelTrainer(special_tokens=["[UNK]", "[PAD]", "[SOS]", "[EOS]"], min_frequency=2)
@@ -233,7 +160,7 @@ def get_ds(config):
     
 
     train_dataloader = DataLoader(train_ds, batch_size=config['batch_size'], shuffle=True)
-    val_dataloader = DataLoader(val_ds, batch_size=8, shuffle=True)
+    val_dataloader = DataLoader(val_ds, batch_size=32, shuffle=True)
 
     return train_dataloader, val_dataloader, tokenizer_src, tokenizer_tgt
 
@@ -255,41 +182,11 @@ def train_model(config):
         print("      On a Windows machine with NVidia GPU, check this video: https://www.youtube.com/watch?v=GMSjDTU8Zlc")
         print("      On a Mac machine, run: pip3 install --pre torch torchvision torchaudio torchtext --index-url https://download.pytorch.org/whl/nightly/cpu")
     device = torch.device(device)
-
-    # Make sure the weights folder exists
-    # print("hi ")
-    # print(f"{{config['model_folder']}")_config['datasource']})
-    # Path(f"{{config['model_folder']}")_config['datasource']}.mkdir(parents=True, exist_ok=True)
-    # print(config["model_folder"])
-    # directory_path = Path(f"{config['model_folder']}_{config['datasource']}")
-    # # Creating the directory if it does not exist
-    # directory_path.mkdir(parents=True, exist_ok=True)
-    # print(f"Directory created or verified at: {directory_path}")
-
-
     directory_path = Path('/content/drive/MyDrive/Models/pytorch-transformer/weights')
-
-    # try :
-    #     directory_path.mkdir(parents=True, exist_ok=True)
-    # except Exception as e:
-    #     print(f"Error creating directory: {e}")
-
-    # if directory_path.exists():
-    #     print(f"Directory created or verified at: {directory_path}")
-    # else:
-    #     print(f"Error creating directory: {directory_path}")
-    #     return
-
-
-
     train_dataloader, val_dataloader, tokenizer_src, tokenizer_tgt = get_ds(config)
     model = get_model(config, tokenizer_src.get_vocab_size(), tokenizer_tgt.get_vocab_size()).to(device)
-    # Tensorboard
     writer = SummaryWriter(config['experiment_name'])
-
     optimizer = torch.optim.Adam(model.parameters(), lr=config['lr'], eps=1e-9)
-
-    # If the user specified a model to preload before training, load it
     initial_epoch = 0
     global_step = 0
     preload = config['preload']
@@ -303,7 +200,6 @@ def train_model(config):
         optimizer.load_state_dict(state['optimizer_state_dict'])
         global_step = state['global_step']
         print("initial_epoch:", initial_epoch,"global_step:", global_step)
-        
     else:
         print('No model to preload, starting from scratch')
 
@@ -315,7 +211,6 @@ def train_model(config):
         total_train_loss = 0
         batch_iterator = tqdm(train_dataloader, desc=f"Processing Epoch {epoch:02d}")
         for batch in batch_iterator:
-
             encoder_input = batch['encoder_input'].to(device) # (b, seq_len)
             decoder_input = batch['decoder_input'].to(device) # (B, seq_len)
             encoder_mask = batch['encoder_mask'].to(device) # (B, 1, 1, seq_len)
@@ -348,18 +243,22 @@ def train_model(config):
             global_step += 1
 
         avg_train_loss = total_train_loss / len(train_dataloader)
-        train_losses.append(avg_train_loss)
+        train_losses.append(avg_train_loss.item())
         print(f"Epoch {epoch:02d} - Average Train Loss: {avg_train_loss:.4f}")
-        # Run validation at the end of every epoch
-        val_loss,cer,wer,blue = run_validation(model, val_dataloader, tokenizer_src, tokenizer_tgt, config['seq_len'], device, lambda msg: batch_iterator.write(msg), global_step, writer)
+
+        val_loss,cer_data,wer_data = run_validation(model, val_dataloader, tokenizer_src, tokenizer_tgt, config['seq_len'], device)
+        print(f"Epoch {epoch:02d} - Validation Loss: {val_loss:.4f}")
         val_losses.append(val_loss)
+        cer.append(cer_data)
+        wer.append(wer_data)
+        # bleu.append(bleu_data)
 
 
-    # Save the model at the end of every epoch
-    model_filepath = directory_path / (config['model_basename'] + str(epoch) + '.pt')
-    print(f"Model weights will be saved at: {model_filepath}")
+        # Save the model at the end of every epoch
+        model_filepath = directory_path / (config['model_basename'] + str(epoch) + '.pt')
+        print(f"Model weights will be saved at: {model_filepath}")
 
-    torch.save({
+        torch.save({
             'epoch': epoch,
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
@@ -370,9 +269,10 @@ def train_model(config):
     save_json(directory_path = Path('/content/drive/MyDrive/Models/pytorch-transformer/weights'))
 
 
-def save_plot(train_losses, val_losses, val_accuracies, directory_path):
-    plt.figure(figsize=(10, 5))
-    plt.subplot(1, 2, 1)
+def save_plot(train_losses, val_losses, directory_path):
+    plt.figure(figsize=(15, 10))
+    
+    plt.subplot(2, 2, 1)
     plt.plot(train_losses, label='Training Loss')
     plt.plot(val_losses, label='Validation Loss')
     plt.title('Loss over Epochs')
@@ -380,12 +280,26 @@ def save_plot(train_losses, val_losses, val_accuracies, directory_path):
     plt.ylabel('Loss')
     plt.legend()
     
-    plt.subplot(1, 2, 2)
-    plt.plot(val_accuracies, label='Validation Accuracy')
-    plt.title('Validation Accuracy over Epochs')
+    plt.subplot(2, 2, 2)
+    plt.plot(cer, label='CER')
+    plt.title('Character Error Rate (CER) over Epochs')
     plt.xlabel('Epoch')
-    plt.ylabel('Accuracy')
+    plt.ylabel('CER')
     plt.legend()
+    
+    plt.subplot(2, 2, 3)
+    plt.plot(wer, label='WER')
+    plt.title('Word Error Rate (WER) over Epochs')
+    plt.xlabel('Epoch')
+    plt.ylabel('WER')
+    plt.legend()
+    
+    # plt.subplot(2, 2, 4)
+    # plt.plot(bleu, label='BLEU Score')
+    # plt.title('BLEU Score over Epochs')
+    # plt.xlabel('Epoch')
+    # plt.ylabel('BLEU Score')
+    # plt.legend()
 
     plt.tight_layout()
     plt.savefig(directory_path / 'training_validation_metrics.png')
@@ -396,8 +310,8 @@ def save_json(directory_path):
         'train_losses': train_losses,
         'val_losses': val_losses,
         'cer': cer,
-        'wer': wer,
-        'blue': blue
+        'wer': wer
+        # 'blue': bleu
     }
 
     with open(directory_path / 'metrics.json', 'w') as f:
