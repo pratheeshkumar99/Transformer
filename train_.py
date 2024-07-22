@@ -7,11 +7,14 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader, random_split
 from torch.optim.lr_scheduler import LambdaLR
+from torch.optim import AdamW
 import json
 import warnings
 from tqdm import tqdm
 import os
 from pathlib import Path
+import numpy as np
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 # Huggingface datasets and tokenizers
 from datasets import load_dataset
@@ -30,6 +33,7 @@ val_losses = []
 # bleu = []
 cer = []
 wer = []
+patience_counter = 0
 
 
 def greedy_batch_decode(model, source, source_mask, tokenizer_src, tokenizer_tgt, max_len, device):
@@ -159,34 +163,61 @@ def get_ds(config):
     print(f'Max length of target sentence: {max_len_tgt}')
     
 
-    train_dataloader = DataLoader(train_ds, batch_size=config['batch_size'], shuffle=True)
-    val_dataloader = DataLoader(val_ds, batch_size=32, shuffle=True)
+    train_dataloader = DataLoader(train_ds, batch_size=config['train_batch_size'], shuffle=True)
+    val_dataloader = DataLoader(val_ds, batch_size=config['validation_batch_size'], shuffle=False)
 
     return train_dataloader, val_dataloader, tokenizer_src, tokenizer_tgt
 
 def get_model(config, vocab_src_len, vocab_tgt_len):
-    model = build_transformer(vocab_src_len, vocab_tgt_len, config["seq_len"], config['seq_len'], d_model=config['d_model'])
+    model = build_transformer(vocab_src_len, vocab_tgt_len, config["seq_len"], config['seq_len'], d_model=config['d_model'],N=config['encoder_decoder_layers'])
     return model
+
+
+
+def get_warmup_scheduler(optimizer, num_warmup_steps):
+    def lr_lambda(current_step: int):
+        if current_step < num_warmup_steps:
+            return float(current_step) / float(max(1, num_warmup_steps))
+        return 1.0
+    return LambdaLR(optimizer, lr_lambda)
+
+def setup_device():
+    device_type = "cuda" if torch.cuda.is_available() else "mps" if torch.has_mps() or torch.backends.mps.is_available() else "cpu"
+    device = torch.device(device_type)
+    if device.type == 'cuda':
+        print(f"Device name: {torch.cuda.get_device_name(device)}")
+        print(f"Device memory: {torch.cuda.get_device_properties(device).total_memory / 1024 ** 3} GB")
+    elif device.type == 'mps':
+        print("Device name: <mps>")
+    else:
+        print("NOTE: No accelerated GPU hardware detected.")
+    return device
 
 def train_model(config):
     # Define the device
-    device = "cuda" if torch.cuda.is_available() else "mps" if torch.has_mps or torch.backends.mps.is_available() else "cpu"
-    print("Using device:", device)
-    if (device == 'cuda'):
-        print(f"Device name: {torch.cuda.get_device_name(device.index)}")
-        print(f"Device memory: {torch.cuda.get_device_properties(device.index).total_memory / 1024 ** 3} GB")
-    elif (device == 'mps'):
-        print(f"Device name: <mps>")
-    else:
-        print("NOTE: If you have a GPU, consider using it for training.")
-        print("      On a Windows machine with NVidia GPU, check this video: https://www.youtube.com/watch?v=GMSjDTU8Zlc")
-        print("      On a Mac machine, run: pip3 install --pre torch torchvision torchaudio torchtext --index-url https://download.pytorch.org/whl/nightly/cpu")
-    device = torch.device(device)
+    best_val_loss = np.inf
+    num_warmup_steps = config['num_warmup_steps']
+    patience = config['patience']
+    device = setup_device()
     directory_path = Path('/content/drive/MyDrive/Models/pytorch-transformer/weights')
     train_dataloader, val_dataloader, tokenizer_src, tokenizer_tgt = get_ds(config)
     model = get_model(config, tokenizer_src.get_vocab_size(), tokenizer_tgt.get_vocab_size()).to(device)
     writer = SummaryWriter(config['experiment_name'])
-    optimizer = torch.optim.Adam(model.parameters(), lr=config['lr'], eps=1e-9)
+    # optimizer = torch.optim.Adam(model.parameters(), lr=config['lr'], eps=1e-9, weight_decay=0.01)
+
+
+
+
+    # Initialize the optimizer
+    optimizer = AdamW(model.parameters(), lr=config['lr'], eps=1e-9, weight_decay=0.01)
+
+    # Initialize the warmup scheduler
+    warmup_scheduler = get_warmup_scheduler(optimizer, num_warmup_steps)
+
+    # Setup ReduceLROnPlateau to be used after warmup
+    plateau_scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=10, verbose=True)
+
+
     initial_epoch = 0
     global_step = 0
     preload = config['preload']
@@ -241,29 +272,55 @@ def train_model(config):
             optimizer.zero_grad(set_to_none=True)
 
             global_step += 1
+            if global_step < num_warmup_steps:
+                warmup_scheduler.step()
+
+
+
 
         avg_train_loss = total_train_loss / len(train_dataloader)
         train_losses.append(avg_train_loss.item())
         print(f"Epoch {epoch:02d} - Average Train Loss: {avg_train_loss:.4f}")
 
-        val_loss,cer_data,wer_data = run_validation(model, val_dataloader, tokenizer_src, tokenizer_tgt, config['seq_len'], device)
-        print(f"Epoch {epoch:02d} - Validation Loss: {val_loss:.4f}")
-        val_losses.append(val_loss)
-        cer.append(cer_data)
-        wer.append(wer_data)
+
+        if epoch % 5 == 0:
+            val_loss,cer_data,wer_data = run_validation(model, val_dataloader, tokenizer_src, tokenizer_tgt, config['seq_len'], device)
+            print(f"Epoch {epoch:02d} - Validation Loss: {val_loss:.4f}")
+            val_losses.append(val_loss)
+            cer.append(cer_data)
+            wer.append(wer_data)
         # bleu.append(bleu_data)
 
 
         # Save the model at the end of every epoch
-        model_filepath = directory_path / (config['model_basename'] + str(epoch) + '.pt')
-        print(f"Model weights will be saved at: {model_filepath}")
+        
 
-        torch.save({
-            'epoch': epoch,
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'global_step': global_step
-        }, model_filepath)
+        # Check and log the learning rate before and after scheduler step
+        old_lr = optimizer.param_groups[0]['lr']
+        plateau_scheduler.step(val_loss)
+        new_lr = optimizer.param_groups[0]['lr']
+
+        if old_lr != new_lr:
+            print(f"Learning rate changed from {old_lr} to {new_lr} due to plateau in validation loss.")
+
+        # Early stopping logic
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            patience_counter = 0  # reset counter if improvement
+            model_filepath = directory_path / (config['model_basename'] + str(epoch) + '.pt')
+            print(f"Model weights will be saved at: {model_filepath}")
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'global_step': global_step
+            }, model_filepath)
+        else:
+            patience_counter += 1  # increment counter if no improvement
+        
+        if patience_counter >= patience:
+            print(f"Stopping early after {epoch+1} epochs")
+            break
     
     save_plot(train_losses, val_losses,directory_path = Path('/content/drive/MyDrive/Models/pytorch-transformer/weights'))
     save_json(directory_path = Path('/content/drive/MyDrive/Models/pytorch-transformer/weights'))
@@ -274,7 +331,14 @@ def save_plot(train_losses, val_losses, directory_path):
     
     plt.subplot(2, 2, 1)
     plt.plot(train_losses, label='Training Loss')
-    plt.plot(val_losses, label='Validation Loss')
+    plt.title('Loss over Epochs')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.legend()
+
+
+    plt.subplot(2, 2, 1)
+    plt.plot(val_losses, label='val Loss')
     plt.title('Loss over Epochs')
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
